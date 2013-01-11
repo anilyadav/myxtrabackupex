@@ -2,13 +2,11 @@
 #/************************************************************************
 # * Copyright (c) 2011 doujinshuai (doujinshuai@gmail.com)
 # * Create Time   : 02-24-2011
-# * Last Modified : 04-23-2011
-# *
-# * ChangeLog:
-# *
+# * Last Modified : 01-11-2013
 # *
 # * Example: mysql_xtraback.sh -f mysql_xtraback.conf -a backup -t [incre|full]
 # * mysql_traback.sh -f mysql_xtraback.conf -a recover -t [incre|full]
+# *
 # ************************************************************************/
 
 
@@ -17,7 +15,8 @@
 ################################################
 
 #/*
-#*/
+# *
+# */
 function func_check_file()
 {
         type=$1
@@ -29,14 +28,15 @@ function func_check_file()
 }
 
 #/*
-#*/
+# *
+# */
 function func_check_backup_args()
 {
         func_check_file d $MySQL_BASE
-        func_check_file f $MySQL_CONF
+        func_check_file f $MySQL_CNF
         func_check_file S $SOCKET
 
-        [ -f $MySQL_CONF ] && OPTIONS=" --defaults-file=$MySQL_CONF"
+        [ -f $MySQL_CNF ] && OPTIONS=" --defaults-file=$MySQL_CNF"
         [ -S $SOCKET ] && OPTIONS=$OPTIONS" --sock=$SOCKET"
 
         [ -n "$IOPS_LIMIT" ] && OPTIONS=$OPTIONS" --throttle=$IOPS_LIMIT"
@@ -53,28 +53,29 @@ function func_check_backup_args()
 }
 
 #/*
-#*/
+# *
+# */
 function func_backup()
 {
         # --------------------------------------------------
         DATE_START=$($DATE "+%s")
         echo ""
         echo "1.Start Xtrabackup operate on $($DATE "+%F %T")"
-        #$BACKUP_SCRIPT --no-timestamp $OPTIONS --stream=tar $BACKUP_DIR 2>${BACKUP_DIR}.log | $GZIP >${BACKUP_DIR}.tar.gz
+        #$INNOBACKUPEX --no-timestamp $OPTIONS --stream=tar $BACKUP_DIR 2>${BACKUP_DIR}.log | $GZIP >${BACKUP_DIR}.tar.gz
         if [ "incre" != "$BACKUP_TYPE" ]
         then
                 BACKUP_FILE=${BACKUP_FILE_PREFIX}${BACKUP_FILE_SUFFIX}
-                BACKUP_CMD="$BACKUP_SCRIPT --no-timestamp $OPTIONS $BACKUP_DIR/$BACKUP_FILE"
-                echo $BACKUP_CMD
-                $BACKUP_CMD >>$BACKUP_DIR/${BACKUP_FILE}.log 2>&1
+                XTRABAK="$INNOBACKUPEX --no-timestamp $OPTIONS $BACKUP_DIR/$BACKUP_FILE"
+                echo $XTRABAK
+                $XTRABAK >>$BACKUP_DIR/${BACKUP_FILE}.log 2>&1
         else
-                func_check_file f $BASE_DIR/xtrabackup_checkpoints
+                func_check_file f $TEMP_DIR/xtrabackup_checkpoints
 
                 BACKUP_FILE=${DELTA_PREFIX}${BACKUP_FILE_PREFIX}${BACKUP_FILE_SUFFIX}${DELTA_SUFFIX}
 
-                BACKUP_CMD="$BACKUP_SCRIPT --no-timestamp $OPTIONS --incremental=$BASE_DIR $BACKUP_DIR/$BACKUP_FILE"
-                echo $BACKUP_CMD
-                $BACKUP_CMD >>$BACKUP_DIR/${BACKUP_FILE}.log 2>&1
+                XTRABAK="$INNOBACKUPEX --no-timestamp $OPTIONS --incremental=$TEMP_DIR $BACKUP_DIR/$BACKUP_FILE"
+                echo $XTRABAK
+                $XTRABAK >>$BACKUP_DIR/${BACKUP_FILE}.log 2>&1
         fi
         RETVAL=$?
         DATE_END=$($DATE "+%s")
@@ -88,7 +89,7 @@ function func_backup()
         else
                 DATE_START=$($DATE "+%s")
                 echo "2.Start compress backup file on $($DATE "+%F %T")."
-                $CP -af $BACKUP_DIR/$BACKUP_FILE/xtrabackup_checkpoints $BASE_DIR/
+                $CP -af $BACKUP_DIR/$BACKUP_FILE/xtrabackup_checkpoints $TEMP_DIR/
                 cd $BACKUP_DIR && $TAR cf - $BACKUP_FILE | $GZIP -qc > ${BACKUP_FILE}.tar.gz 
                 RETVAL=$?
                 if [ $RETVAL != 0 ];then
@@ -129,16 +130,17 @@ function func_backup()
 }
 
 #/*
-#*/
+# *
+# */
 function func_check_recover_args()
 {
         func_check_file d $RECOVER_MySQL_BASE
-        func_check_file f $RECOVER_MySQL_CONF
+        func_check_file f $RECOVER_MySQL_CNF
         func_check_file S $RECOVER_SOCKET
         func_check_file d $RECOVER_BACKUP_DIR
 
         #
-        [ -f $RECOVER_MySQL_CONF ] && RECOVER_OPTIONS="--defaults-file=$RECOVER_MySQL_CONF"
+        [ -f $RECOVER_MySQL_CNF ] && RECOVER_OPTIONS="--defaults-file=$RECOVER_MySQL_CNF"
         [ -S $RECOVER_SOCKET ] && RECOVER_OPTIONS=$RECOVER_OPTIONS" --sock=$RECOVER_SOCKET"
 
         #
@@ -150,13 +152,13 @@ function func_check_recover_args()
     then
                 RECOVER_LOG=$($DATE "+%Y%m%d_%H%M_$RECOVER_PORT")
         fi
-        [ -f $BASE_DIR/xtrabackup_checkpoints ] && $RM $BASE_DIR/xtrabackup_checkpoints
+        [ -f $TEMP_DIR/xtrabackup_checkpoints ] && $RM $TEMP_DIR/xtrabackup_checkpoints
 }
 
 
 #/*
 # *
-#*/
+# */
 function func_apply_log()
 {
         #
@@ -178,8 +180,8 @@ function func_apply_log()
 
                         #
                         cd $BACKUP_DIR && $GZIP -dc $RECOVER_BACKUP_FILE.tar.gz | $TAR ixf - -C $RECOVER_BACKUP_DIR
-                        cd $RECOVER_BACKUP_DIR && $MV $RECOVER_BACKUP_FILE/* $BASE_DIR
-                        func_check_file f $BASE_DIR/xtrabackup_checkpoints
+                        cd $RECOVER_BACKUP_DIR && $MV $RECOVER_BACKUP_FILE/* $TEMP_DIR
+                        func_check_file f $TEMP_DIR/xtrabackup_checkpoints
                         cd $RECOVER_BACKUP_DIR && $RM -r $RECOVER_BACKUP_FILE
                 elif [ "incre" = "$BACKUP_TYPE" ]
                 then
@@ -205,7 +207,7 @@ function func_apply_log()
                 #
                 echo "2. Start apply log from $BSEE_DIR at $($DATE "+%F %T")."
                 IFS=$OLD_IFS
-                APPLY_LOG_CMD="$BACKUP_SCRIPT --apply-log $RECOVER_OPTIONS $INCREMENTAL_OPTIONS $BASE_DIR"
+                APPLY_LOG_CMD="$INNOBACKUPEX --apply-log $RECOVER_OPTIONS $INCREMENTAL_OPTIONS $TEMP_DIR"
                 echo $APPLY_LOG_CMD
                 $APPLY_LOG_CMD >>$RECOVER_BACKUP_DIR/${RECOVER_LOG}.log 2>&1
                 RETVAL=$?
@@ -213,7 +215,7 @@ function func_apply_log()
                 DATE_END=$($DATE "+%s")
                 if [ $RETVAL != 0 ]; then
                         echo "apply log failed!"
-                        $RM -fr $BASE_DIR/*
+                        $RM -fr $TEMP_DIR/*
                         exit 99
                 else
                         $RM -fr $RECOVER_BACKUP_DIR/$RECOVER_BACKUP_FILE/
@@ -228,7 +230,7 @@ function func_apply_log()
 
 #/*
 # *
-#*/
+# */
 function func_copy_back()
 {
         # 
@@ -236,7 +238,7 @@ function func_copy_back()
         echo ""
         echo "3. Start copy back from $backup_directory at $($DATE "+%F %T")"
         IFS=$OLD_IFS
-        COPY_BACK_CMD="$BACKUP_SCRIPT --copy-back $RECOVER_OPTIONS $BASE_DIR"
+        COPY_BACK_CMD="$INNOBACKUPEX --copy-back $RECOVER_OPTIONS $TEMP_DIR"
         echo "$COPY_BACK_CMD"
         $COPY_BACK_CMD >>$RECOVER_BACKUP_DIR/${RECOVER_LOG}.log 2>&1
         RETVAL=$?
@@ -248,7 +250,7 @@ function func_copy_back()
                 [ -n "$MySQL_USER" -a -n "$MySQL_GROUP" ] && $CHOWN -R ${MySQL_USER}:${MySQL_GROUP} $RECOVER_MySQL_BASE
                 echo "Copy back Success! Spend time ($((DATE_END-DATE_START)) Sec)"
         fi
-        $RM -fr $BASE_DIR/*
+        $RM -fr $TEMP_DIR/*
         echo "3. End copy back from $backup_directory at $($DATE "+%F %T")"
         echo ""
 }
@@ -256,7 +258,7 @@ function func_copy_back()
 
 #/*
 # *
-#*/
+# */
 function usage ()
 {
         echo "Usage: $0 -c cfg_file -a [OPTIONS] -t full"
@@ -276,7 +278,7 @@ function usage ()
 
 #/*
 # *
-#*/
+# */
 while getopts "c:a:h:t:" OPT
 do
         case $OPT in
@@ -295,18 +297,18 @@ fi
 
 #/*
 # *
-#*/
+# */
 #source $HOME/.bash_profile
 source /etc/profile
 
 #/*
 # *
-#*/
+# */
 func_check_file f $CONF_FILE && source $CONF_FILE
 
 #/*
-# *
-#*/
+# * check system cmd
+# */
 CP=$(which cp)
 MV=$(which mv)
 RM=$(which rm)
@@ -328,19 +330,19 @@ func_check_file f $FIND
 func_check_file f $RSYNC
 
 #/*
-# *
-#*/
-func_check_file d $BASE_DIR
+# * check work dir
+# */
+func_check_file d $TEMP_DIR
 func_check_file d $BACKUP_DIR
 func_check_file d $MySQL_CMD_DIR
-func_check_file d $BACKUP_CMD_DIR
-func_check_file f $BACKUP_CMD_DIR/$BACKUP_CMD
-func_check_file f $BACKUP_CMD_DIR/$BACKUP_SCRIPT
-export PATH=$PATH:$BACKUP_CMD_DIR:$MySQL_CMD_DIR
+func_check_file d $XTRABAK_DIR
+func_check_file f $XTRABAK_DIR/$XTRABAK
+func_check_file f $XTRABAK_DIR/$INNOBACKUPEX
+export PATH=$PATH:$XTRABAK_DIR:$MySQL_CMD_DIR
 
 #/*
-# *
-#*/
+# * main function
+# */
 if [ -n "$ACTION" ] ;then
         case $ACTION in
                 backup )
