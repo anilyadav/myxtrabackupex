@@ -1,8 +1,8 @@
 #!/bin/sh
 #/************************************************************************
-# * Copyright (c) 2011 doujinshuai (doujinshuai@gmail.com)
+# * Copyright (c) 2011-2013 doujinshuai (doujinshuai@gmail.com)
 # * Create Time   : 02-24-2011
-# * Last Modified : 01-11-2013
+# * Last Modified : 01-13-2013
 # *
 # * Usage: myxtrabackupex [OPTIONS]
 # *        myxtrbackupex.sh -c cfg_file -o backup -t full
@@ -42,8 +42,8 @@ function func_check_backup_args()
 
         OPTIONS=" --stream=xbstream --no-timestamp --no-lock --slave-info --safe-slave-backup --defaults-file=$MySQL_CNF"
         [ -n "$USER" -a -n "$PASSWD" ] && OPTIONS=$OPTIONS" --user=$USER --password=$PASSWD"
-        { [ -S "$SOCKET" ] && OPTIONS=$OPTIONS" --sock=$SOCKET"; } \
-            || { [ -n "$HOST" -a -n "$PORT" ] && OPTIONS=$OPTIONS" --host=$HOST --port=$PORT"; }
+        { [ -S "$SOCKET" ] && OPTIONS=$OPTIONS" --sock=$SOCKET"; } || \
+                { [ -n "$HOST" -a -n "$PORT" ] && OPTIONS=$OPTIONS" --host=$HOST --port=$PORT"; }
         [ -n "$DATABASE" ] && OPTIONS=$OPTIONS" --databases=$DATABASE"
         [ -n "$COMPRESS" ] && [ $COMPRESS -ge 1 ] && OPTIONS=$OPTIONS" --compress --compress-threads=$COMPRESS"
         [ -n "$THROTTLE" ] && [ $THROTTLE -ge 1 ] && OPTIONS=$OPTIONS" --throttle=$THROTTLE"
@@ -87,23 +87,39 @@ function func_backup()
         #------------ simple separator line ------------
 
         #------------ simple separator line ------------
+        $SLEEP 2
         if [ 1 = "$RSYNC_OPTS" ]; then
                 echo ""
                 echo "2.$($DATE "+%F_%T"): rsync work start."
                 func_check_file f $RSYNC
-                [ -n "$RSYNC_USER" -a -n "$RSYNC_PWD_FILE" ] && RSYNC_AUTH="--password-file=$RSYNC_PWD_FILE ${RSYNC_USER}@"
+                func_check_file n $RSYNC_HOST
+
+                SYNC_OPTIONS=" -vzrtopgl"
                 [ -n "$RSYNC_LIMIT" ] && RSYNC_OPTIONS=" --bwlimit=${RSYNC_LIMIT}"
-                $SLEEP 5
+                [ -n "$RSYNC_PORT" ] && RSYNC_OPTIONS=$RSYNC_OPTIONS" --port=$RSYNC_PORT"
+                [ -n "$RSYNC_USER" ] && RSYNC_AUTH=" ${RSYNC_USER}@"
+                if [ 1 = "$SSH_OPTS" ]; then
+                        func_check_file n $RSYNC_USER
+                        RSYNC_OPTIONS=$RSYNC_OPTIONS" -e ssh"
+                        [ -n "$RSYNC_PATH" ] && RSYNC_PATH="/"$RSYNC_PATH
+                        RSYNC_SEND_CMD="$RSYNC_OPTIONS ${BACKUP_FILE_DIR}.* ${RSYNC_AUTH}${RSYNC_HOST}:${RSYNC_PATH}/"
+                else
+                        [ -f "$RSYNC_PWD_FILE" ] && RSYNC_OPTIONS=$RSYNC_OPTIONS" --password-file=$RSYNC_PWD_FILE"
+                        [ -n "$RSYNC_PATH" ] && RSYNC_PATH=":"$RSYNC_PATH
+                        RSYNC_SEND_CMD="$RSYNC $RSYNC_OPTIONS ${BACKUP_FILE_DIR}.* ${RSYNC_AUTH}${RSYNC_HOST}:${RSYNC_PATH}/"
+                fi
+
                 DATE_START=$($DATE "+%s")
-                $RSYNC -vzrtopgl $RSYNC_OPTIONS $BACKUP_FILE_DIR $BACKUP_LOG_DIR ${RSYNC_AUTH}${RSYNC_HOST}::${RSYNC_PATH}/
+                echo "  $RSYNC_SEND_CMD"
+                $RSYNC_SEND_CMD
                 RETVAL=$?
                 DATE_END=$($DATE "+%s")
+
                 if [ $RETVAL = 0 ]; then
-                        echo "$($DATE "+%F %T"). rsync $HOST:$PORT backup data dir completed. Spend time $((DATE_END-DATE_START)) Sec."
+                        echo "2. $($DATE "+%F %T"). rsync $HOST:$PORT backup data dir completed. Spend time $((DATE_END-DATE_START)) Sec."
                 else
-                        echo "rsync $HOST:$PORT backup data dir failed"
+                        echo "2. $($DATE "+%F %T"). rsync $HOST:$PORT backup data dir failed. Spend time $((DATE_END-DATE_START)) Sec."
                 fi
-                echo "2.$($DATE "+%F_%T"): rsync work end."
                 echo ""
         fi
         #------------ simple separator line ------------
@@ -113,7 +129,7 @@ function func_backup()
         # * Risk: Will delete the file in directory BACKUP_DIR
         # */
         echo "3.$($DATE "+%F_%T"): Clear old backup file work start."
-        echo "Deleting files older than $RETAIN_DAYS days ONLY in ${BACKUP_DIR}"
+        echo "  Deleting files older than $RETAIN_DAYS days ONLY in ${BACKUP_DIR}"
         $FIND ${BACKUP_DIR} -maxdepth 1 -mtime +$RETAIN_DAYS -type f -exec rm -r "{}" \;
         echo "3.$($DATE "+%F_%T"): Clear old backup file work end."
         echo ""
