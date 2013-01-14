@@ -156,7 +156,7 @@ function func_check_recover_args()
 function func_prepare()
 {
         COUNT=1
-        OLD_IFS=$IFS && IFS=:
+        OLD_IFS=$IFS && IFS=,
         for backupfile in $RECOVER_BACKUP_LIST
         do
                 #------------ simple separator line ------------
