@@ -159,12 +159,14 @@ function func_prepare()
         OLD_IFS=$IFS && IFS=,
         for backupfile in $RECOVER_BACKUP_LIST
         do
-                #------------ simple separator line ------------
-                echo -e "\n\n"
-                echo "1.$($DATE "+%F %T") xbstream unpack file to $RECOVER_DIR work start."
+
                 BACKUP_FILE_DIR=$BACKUP_DIR/$backupfile
                 RECOVER_FILE_DIR=$RECOVER_DIR/$backupfile
                 func_check_file f $BACKUP_FILE_DIR
+
+                #------------ simple separator line ------------
+                echo -e "\n\n"
+                echo "1.$($DATE "+%F %T") xbstream unpack file to $RECOVER_DIR work start."
 
                 DATE_START=$($DATE "+%s")
                 [ $COUNT -gt 1 -a "full" = "$BACKUP_TYPE" ] && break
