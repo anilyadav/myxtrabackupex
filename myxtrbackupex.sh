@@ -11,6 +11,10 @@
 # *   -t : type [ full | incre ], default is full.
 # *   -h : help
 # *
+# * # add crontab schedule backup plan
+# * 10 3 * * 1 sh myxtrbackupex.sh -c backup.cfg -o backup >> ../logs/schedule.log 2>&1 &
+# * 10 3 * * 2,3,4,5,6,7 sh myxtrbackupex.sh -c backup.cfg -o backup -t incre >> ../logs/schedule.log 2>&1 &
+# *
 # ************************************************************************/
 
 
@@ -19,16 +23,16 @@
 ################################################
 
 #/*
-# *
+# * test args
 # */
 function func_check_file()
 {
-        type=$1
-        filepath=$2
-        if [ ! -$type "$filepath" ]; then
-                echo "Error: $filepath dont existed; Please check this file path."
-                exit 2
-        fi
+    type=$1
+    filepath=$2
+    if [ ! -$type "$filepath" ]; then
+        echo "Error: $filepath dont existed; Please check this file path."
+        exit 2
+    fi
 }
 
 #/*
@@ -36,77 +40,105 @@ function func_check_file()
 # */
 function func_check_backup_args()
 {
-        func_check_file d $MySQL_BASE
-        func_check_file f $MySQL_CNF
-        #[ -n "$RETAIN_DAYS" ] && RETAIN_DAYS
+    func_check_file d $MySQL_BASE
+    func_check_file f $MySQL_CNF
+    #[ -n "$RETAIN_DAYS" ] && RETAIN_DAYS
 
-        OPTIONS=" --stream=xbstream --no-timestamp --no-lock --slave-info --safe-slave-backup --defaults-file=$MySQL_CNF"
-        [ -n "$USER" -a -n "$PASSWD" ] && OPTIONS=$OPTIONS" --user=$USER --password=$PASSWD"
-        { [ -S "$SOCKET" ] && OPTIONS=$OPTIONS" --sock=$SOCKET"; } || \
-                { [ -n "$HOST" -a -n "$PORT" ] && OPTIONS=$OPTIONS" --host=$HOST --port=$PORT"; }
-        [ -n "$DATABASE" ] && OPTIONS=$OPTIONS" --databases=$DATABASE"
-        [ -n "$COMPRESS" ] && [ $COMPRESS -ge 1 ] && OPTIONS=$OPTIONS" --compress --compress-threads=$COMPRESS"
-        [ -n "$THROTTLE" ] && [ $THROTTLE -ge 1 ] && OPTIONS=$OPTIONS" --throttle=$THROTTLE"
-        [ -n "$PARALLEL" ] && [ $PARALLEL -ge 1 ] && OPTIONS=$OPTIONS" --parallel=$PARALLEL"
-        [ -n "$USE_MEMORY" ] && OPTIONS=$OPTIONS" --use-memory=$USE_MEMORY"
-        OPTIONS=$OPTIONS" --extra-lsndir=$TEMP_DIR"
+    OPTIONS=""
+    [ -n "$USER" -a -n "$PASSWD" ] && OPTIONS=$OPTIONS" --user=$USER --password=$PASSWD"
+    { [ -S "$SOCKET" ] && OPTIONS=$OPTIONS" --sock=$SOCKET"; } || \
+        { [ -n "$HOST" -a -n "$PORT" ] && OPTIONS=$OPTIONS" --host=$HOST --port=$PORT"; }
+    if [ -n "$DATABASES" ]; then
+        OLD_IFS=$IFS && IFS=,
+        for dbname in $DATABASES; do db_list=$db_list"$dbname "; done
+        IFS=$OLD_IFS
+        db_list=$(echo $db_list)
+        OPTIONS=$OPTIONS" --databases='$db_list'"
+    fi
+    if [ -n "$STREAM" ]; then
+        [ $STREAM = "xbstream" ] && OPTIONS=$OPTIONS" --stream=xbstream" || \
+           { [ $STREAM = "tar" ] && OPTIONS=$OPTIONS" --stream=tar" ; }
+    fi
+    if [[ "$COMPRESS" =~ ^[1-9][0-9]*$ ]]; then
+        if [ $COMPRESS -eq 1 ]; then
+            OPTIONS=$OPTIONS" --compress"
+        else [ $COMPRESS -gt 1 ]
+            OPTIONS=$OPTIONS" --compress --compress-threads=$COMPRESS"
+        fi
+    fi
+    [[ "$THROTTLE" =~ ^[1-9][0-9]*$ ]] && [ $THROTTLE -ge 1 ] && OPTIONS=$OPTIONS" --throttle=$THROTTLE"
+    [[ "$USE_MEMORY" =~ ^[1-9][0-9kKmMgG]*$ ]] && OPTIONS=$OPTIONS" --use-memory=$USE_MEMORY"
 
-        [ "incre" = "$BACKUP_TYPE" ] && INCREMENTAL_OPTIONS=" --incremental-basedir=$TEMP_DIR --incremental"
+    OPTIONS=$OPTIONS" --no-timestamp --no-lock --slave-info --safe-slave-backup --extra-lsndir=$TEMP_DIR --tmpdir=$TEMP_DIR --defaults-file=$MySQL_CNF"
+
+    [ "incre" = "$BACKUP_TYPE" ] && INCRE_OPTIONS=" --incremental-basedir=$TEMP_DIR --incremental"
 }
 
 #/*
-# *
+# * backup operation
 # */
 function func_backup()
 {
-        #------------ simple separator line ------------
-        echo ""
-        echo "1.$($DATE "+%F_%T"): innobackupex work Start."
+    #------------ simple separator line ------------
+    echo ""
+    echo "1.$($DATE "+%F_%T"): innobackupex work Start."
 
-        DATE_START=$($DATE "+%s")
-        DATE_TIME=$(date "+%Y%m%d_%H%M%S")
-        BACKUP_FILE_DIR=$BACKUP_DIR/${BACKUP_FILE_PREFIX}${DATE_TIME}${BACKUP_FILE_SUFFIX}
-        if [ "incre" = "$BACKUP_TYPE" ]; then
+    DATE_TIME=$(date "+%Y%m%d_%H%M%S")
+    BACKUP_FILE_DIR=$BACKUP_DIR/${BACKUP_FILE_PREFIX}${DATE_TIME}${BACKUP_FILE_SUFFIX}
+    if [ "incre" = "$BACKUP_TYPE" ]; then
                 func_check_file f $TEMP_DIR/xtrabackup_checkpoints
                 BACKUP_FILE_DIR=${BACKUP_FILE_DIR}_incre
-        fi
-        MYXTRABACKUPEX="$INNOBACKUPEX $OPTIONS $INCREMENTAL_OPTIONS $BACKUP_DIR"
-        echo $MYXTRABACKUPEX" > "${BACKUP_FILE_DIR}.xbstream
-        { $MYXTRABACKUPEX > ${BACKUP_FILE_DIR}.xbstream ; } >> ${BACKUP_FILE_DIR}.log 2>&1
-        RETVAL=$?
+    fi
 
-        DATE_END=$($DATE "+%s")
-        if [ $RETVAL = 0 ]; then
+    if [ -n "$STREAM" ]; then
+            backup_file=${BACKUP_FILE_DIR}.${STREAM}
+            if [ "$GZIP_OPTS" = "1" ]; then
+                 BACKUP_TARGET=$BACKUP_DIR" | $GZIP - >"
+                 backup_file=${backup_file}.gz
+            else
+                 BACKUP_TARGET=$BACKUP_DIR" >"
+            fi
+    else
+            backup_file=$BACKUP_FILE_DIR
+    fi
+
+    DATE_START=$($DATE "+%s")
+    echo "$INNOBACKUPEX $OPTIONS $INCRE_OPTIONS $BACKUP_TARGET $backup_file"
+    $INNOBACKUPEX $OPTIONS $INCRE_OPTIONS $BACKUP_TARGET $backup_file >> ${backup_file}.log 2>&1
+    RETVAL=$?
+    DATE_END=$($DATE "+%s")
+
+    if [ $RETVAL = 0 ]; then
                 echo "1.$($DATE "+%F_%T"): innobackupex completed OK! Spend time $((DATE_END-DATE_START)) Sec."
                 echo ""
-        else
+    else
                 echo "1.$($DATE "+%F_%T"): innobackupex operation failed! Spend time $((DATE_END-DATE_START)) Sec."
                 exit 1
-        fi
-        echo ""
-        #------------ simple separator line ------------
+    fi
+    echo ""
+    #------------ simple separator line ------------
 
-        #------------ simple separator line ------------
-        $SLEEP 2
-        if [ 1 = "$RSYNC_OPTS" ]; then
+    #------------ simple separator line ------------
+    $SLEEP 2
+    if [ 1 = "$RSYNC_OPTS" ]; then
                 echo ""
                 echo "2.$($DATE "+%F_%T"): rsync work start."
                 func_check_file f $RSYNC
                 func_check_file n $RSYNC_HOST
 
                 SYNC_OPTIONS=" -vzrtopgl"
-                [ -n "$RSYNC_LIMIT" ] && RSYNC_OPTIONS=" --bwlimit=${RSYNC_LIMIT}"
-                [ -n "$RSYNC_PORT" ] && RSYNC_OPTIONS=$RSYNC_OPTIONS" --port=$RSYNC_PORT"
+                [[ "$RSYNC_LIMIT" =~ ^[1-9][0-9]*$ ]] && RSYNC_OPTIONS=" --bwlimit=${RSYNC_LIMIT}"
+                [[ "$RSYNC_PORT" =~ ^[1-9][0-9]*$ ]] && RSYNC_OPTIONS=$RSYNC_OPTIONS" --port=$RSYNC_PORT"
                 [ -n "$RSYNC_USER" ] && RSYNC_AUTH=" ${RSYNC_USER}@"
                 if [ 1 = "$SSH_OPTS" ]; then
                         func_check_file n $RSYNC_USER
                         RSYNC_OPTIONS=$RSYNC_OPTIONS" -e ssh"
                         [ -n "$RSYNC_PATH" ] && RSYNC_PATH="/"$RSYNC_PATH
-                        RSYNC_SEND_CMD="$RSYNC_OPTIONS ${BACKUP_FILE_DIR}.* ${RSYNC_AUTH}${RSYNC_HOST}:${RSYNC_PATH}/"
+                        RSYNC_SEND_CMD="$RSYNC_OPTIONS ${backup_file}* ${RSYNC_AUTH}${RSYNC_HOST}:${RSYNC_PATH}/"
                 else
                         [ -f "$RSYNC_PWD_FILE" ] && RSYNC_OPTIONS=$RSYNC_OPTIONS" --password-file=$RSYNC_PWD_FILE"
                         [ -n "$RSYNC_PATH" ] && RSYNC_PATH=":"$RSYNC_PATH
-                        RSYNC_SEND_CMD="$RSYNC $RSYNC_OPTIONS ${BACKUP_FILE_DIR}.* ${RSYNC_AUTH}${RSYNC_HOST}:${RSYNC_PATH}/"
+                        RSYNC_SEND_CMD="$RSYNC $RSYNC_OPTIONS ${backup_file}* ${RSYNC_AUTH}${RSYNC_HOST}:${RSYNC_PATH}/"
                 fi
 
                 DATE_START=$($DATE "+%s")
@@ -121,19 +153,21 @@ function func_backup()
                         echo "2. $($DATE "+%F %T"). rsync $HOST:$PORT backup data dir failed. Spend time $((DATE_END-DATE_START)) Sec."
                 fi
                 echo ""
-        fi
-        #------------ simple separator line ------------
+    fi
+    #------------ simple separator line ------------
 
-        #------------ simple separator line ------------
-        #/*
-        # * Risk: Will delete the file in directory BACKUP_DIR
-        # */
-        echo "3.$($DATE "+%F_%T"): Clear old backup file work start."
-        echo "  Deleting files older than $RETAIN_DAYS days ONLY in ${BACKUP_DIR}"
-        $FIND ${BACKUP_DIR} -maxdepth 1 -mtime +$RETAIN_DAYS -type f -exec rm -r "{}" \;
-        echo "3.$($DATE "+%F_%T"): Clear old backup file work end."
-        echo ""
-        #------------ simple separator line ------------
+    #------------ simple separator line ------------
+    #/*
+    # * Risk: Will delete the file in directory BACKUP_DIR
+    # */
+    if [[ "$RETAIN_DAYS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "3.$($DATE "+%F_%T"): Clear old backup file work start."
+            echo "    Deleting files older than $RETAIN_DAYS days ONLY in ${BACKUP_DIR}"
+            $FIND ${BACKUP_DIR} -maxdepth 1 -mtime +$RETAIN_DAYS -type f -exec rm -r "{}" \;
+            echo "3.$($DATE "+%F_%T"): Clear old backup file work end."
+            echo "";
+    fi
+    #------------ simple separator line ------------
 }
 
 #/*
@@ -145,7 +179,7 @@ function func_check_recover_args()
         func_check_file d $RECOVER_MySQL_BASE/data
         func_check_file d $RECOVER_DIR
         func_check_file f $RECOVER_MySQL_CNF
-        INCREMENTAL_OPTIONS=""
+        INCRE_OPTIONS=""
         RECOVER_OPTIONS=" --defaults-file=$RECOVER_MySQL_CNF"
 }
 
@@ -155,70 +189,87 @@ function func_check_recover_args()
 # */
 function func_prepare()
 {
-        COUNT=1
-        OLD_IFS=$IFS && IFS=,
-        for backupfile in $RECOVER_BACKUP_LIST
-        do
-
-                BACKUP_FILE_DIR=$BACKUP_DIR/$backupfile
-                RECOVER_FILE_DIR=$RECOVER_DIR/$backupfile
-                func_check_file f $BACKUP_FILE_DIR
-
-                #------------ simple separator line ------------
-                echo -e "\n\n"
-                echo "1.$($DATE "+%F %T") xbstream unpack file to $RECOVER_DIR work start."
-
-                DATE_START=$($DATE "+%s")
-                [ $COUNT -gt 1 -a "full" = "$BACKUP_TYPE" ] && break
-                { [ ! -d $RECOVER_FILE_DIR ] && $MKDIR $RECOVER_FILE_DIR; } || exit 1
-                cd $BACKUP_DIR && $XBSTREAM -x < $BACKUP_FILE_DIR -C $RECOVER_FILE_DIR/
-                DATE_END=$($DATE "+%s")
-
-                echo "1.$($DATE "+%F %T") xbstream unpack file to $RECOVER_FILE_DIR work end. Spend time $((DATE_END-DATE_START)) Sec."
-                #------------ simple separator line ------------
-
-                #------------ simple separator line ------------
-                IFS=$OLD_IFS
-                echo ""
-                echo "2. $($DATE "+%F %T") qpress all backup file work start."
-                DATE_START=$($DATE "+%s")
-                for tmp_bf in $( $FIND $RECOVER_FILE_DIR -iname "*\.qp" );
-                do
-                        $QPRESS -d $tmp_bf $(dirname $tmp_bf) && $RM $tmp_bf;
-                done
-                DATE_END=$($DATE "+%s")
-                echo "2. $($DATE "+%F %T") qpress all backup file work start. Spend time $((DATE_END-DATE_START)) Sec."
-                echo ""
-                #------------ simple separator line ------------
-
-                #------------ simple separator line ------------
-                echo "3. $($DATE "+%F %T") innobackupex apply log work start."
-                DATE_START=$($DATE "+%s")
-
-                if [ $COUNT -eq 1 ]; then
-                        $MV $RECOVER_FILE_DIR/* $TEMP_DIR/ && $RM -fr $RECOVER_FILE_DIR
-                elif [ "incre" = "$BACKUP_TYPE" ]; then
-                        INCREMENTAL_OPTIONS=" --incremental-dir=$RECOVER_FILE_DIR"
-                fi
-                APPLY_LOG_CMD="$INNOBACKUPEX --apply-log --redo-only $RECOVER_OPTIONS $TEMP_DIR $INCREMENTAL_OPTIONS"
-                echo $APPLY_LOG_CMD
-                $APPLY_LOG_CMD >> ${RECOVER_FILE_DIR}.log 2>&1
-                RETVAL=$?
-
-                $RM -fr $RECOVER_FILE_DIR
-                DATE_END=$($DATE "+%s")
-                if [ $RETVAL != 0 ]; then
-                        echo "3.$($DATE "+%F %T") apply log faild!. Spend time ($((DATE_END-DATE_START)) Sec)"
-                        exit 3
-                else
-                        echo "3.$($DATE "+%F %T") apply log success!. Spend time ($((DATE_END-DATE_START)) Sec)"
-                fi
-                #------------ simple separator line ------------
-
-                COUNT=$((COUNT+1))
-                OLD_IFS=$IFS && IFS=:
-        done
+    COUNT=1
+    OLD_IFS=$IFS && IFS=,
+    for backupfile in $RECOVER_BACKUP_LIST
+    do
         IFS=$OLD_IFS
+        RECOVER_FILE_DIR=$RECOVER_DIR/$backupfile
+        func_check_file f $RECOVRE_FILE_DIR
+        [ $COUNT -gt 1 -a "full" = "$BACKUP_TYPE" ] && break
+        if [ -n "$STREAM" ]; then 
+                #------------ simple separator line ------------
+                echo "1.$($DATE "+%F %T") myxtrabackupex unpack file work start."
+                DATE_START=$($DATE "+%s")
+                cd $RECOVER_DIR 
+                if [ $STREAM = "tar" ]; then
+                    if [ "$GZIP_OPTS" = "1" ]; then
+                        recover_file=$(echo $RECOVER_FILE_DIR | $AWK 'BEGIN{FS=".tar.gz"}{ print $1}' )
+                        UNPACK_CMD="$TAR -zxif $RECOVER_FILE_DIR -C $recover_file/"
+                    else
+                        recover_file=$(echo $RECOVER_FILE_DIR | $AWK 'BEGIN{FS=".tar"}{ print $1}' )
+                        UNPACK_CMD="$TAR -xif $RECOVER_FILE_DIR -C $recover_file/"
+                    fi
+                elif [ $STREAM = "xbstream" ]; then
+                    if [ "$GZIP_OPTS" = "1" ]; then
+                        echo "   $GZIP $RECOVER_FILE_DIR" && $GZIP $RECOVER_FILE_DIR
+                        recover_file=$(echo $RECOVER_FILE_DIR | $AWK 'BEGIN{FS=".xbstrem.gz"}{ print $1}' )
+                    else
+                        recover_file=$(echo $RECOVER_FILE_DIR | $AWK 'BEGIN{FS=".xbstrem"}{ print $1}' )
+                    fi
+                    UNPACK_CMD="$XBSTEAM -x ${recover_file}.xbstream  < $ -C $recover_file"
+                fi
+                [ ! -d $recover_file ] && $MKDIR $recover_file || exit 1
+                echo "    $UNPACK_CMD" && $UNPACK_CMD
+
+                DATE_END=$($DATE "+%s")
+                echo "1.$($DATE "+%F %T") myxtrabackupex unpack file work end. Spend time $((DATE_END-DATE_START)) Sec."
+                #------------ simple separator line ------------
+        fi
+
+        #------------ simple separator line ------------
+        if [[ "$COMPRESS" =~ ^[1-9][0-9]*$ ]]; then 
+            echo ""
+            echo "2. $($DATE "+%F %T") qpress all backup file work start."
+            DATE_START=$($DATE "+%s")
+            for tmp_bf in $( $FIND $RECOVER_FILE_DIR -iname "*\.qp" ); do
+                $QPRESS -d $tmp_bf $(dirname $tmp_bf) && $RM $tmp_bf;
+            done
+            DATE_END=$($DATE "+%s")
+            echo "2. $($DATE "+%F %T") qpress all backup file work start. Spend time $((DATE_END-DATE_START)) Sec."
+            echo ""
+        fi
+        #------------ simple separator line ------------
+
+        #------------ simple separator line ------------
+        echo "3. $($DATE "+%F %T") innobackupex apply log work start."
+        [ -f "$TEMP_DIR/working_flag" ] && { echo "innobackupex aplly log working or fall by the wayside."; exit 3; }
+        if [ $COUNT -eq 1 ]; then
+            $MV $RECOVER_FILE_DIR/* $TEMP_DIR/ && $TOUCH $TEMP_DIR/working_flag && $RM -fr $RECOVER_FILE_DIR
+        elif [ "incre" = "$BACKUP_TYPE" ]; then
+            INCRE_OPTIONS=" --incremental-dir=$RECOVER_FILE_DIR"
+        fi
+
+        DATE_START=$($DATE "+%s")
+        APPLY_LOG_CMD="$INNOBACKUPEX --apply-log --redo-only $RECOVER_OPTIONS $TEMP_DIR $INCRE_OPTIONS"
+        echo $APPLY_LOG_CMD
+        $APPLY_LOG_CMD >> ${RECOVER_FILE_DIR}.log 2>&1
+        RETVAL=$?
+        DATE_END=$($DATE "+%s")
+
+        if [ $RETVAL != 0 ]; then
+            echo "3.$($DATE "+%F %T") apply log faild!. Spend time ($((DATE_END-DATE_START)) Sec)"
+            exit 3
+        else
+            $RM -fr $TEMP_DIR/working_flag
+            echo "3.$($DATE "+%F %T") apply log success!. Spend time ($((DATE_END-DATE_START)) Sec)"
+        fi
+        #------------ simple separator line ------------
+
+        COUNT=$((COUNT+1))
+        OLD_IFS=$IFS && IFS=:
+    done
+    IFS=$OLD_IFS
 }
 
 #/*
@@ -264,17 +315,17 @@ function main()
     if [ -n "$OPERATION" ] ;then
         case $OPERATION in
                 backup )
-                        echo -e "\n"
+                        echo -e "\n\n"
                         echo "*********   Start backup operate at $($DATE "+%F %T"). *********"
                         DATE_START_ALL=$($DATE "+%s")
                         func_check_backup_args
                         func_backup
                         DATE_END_ALL=$($DATE "+%s")
                         echo "*********   End backup operate at $($DATE "+%F %T"). Spend time $((DATE_END_ALL-DATE_START_ALL)) Sec.   *********"
-                        echo ""
+                        echo -e "\n\n"
                         ;;
                 recover )
-                        echo -e "\n"
+                        echo -e "\n\n"
                         echo "*********   Start recover operate at $($DATE "+%F %T").   *********"
                         DATE_START_ALL=$($DATE "+%s")
                         func_check_recover_args
@@ -282,12 +333,14 @@ function main()
                         func_recover $TEMP_DIR
                         DATE_END_ALL=$($DATE "+%s")
                         echo "*********   End recover operate at $($DATE "+%F %T"). Spend time $((DATE_END_ALL-DATE_START_ALL)) Sec.   *********" 
-                        echo ""
+                        echo -e "\n\n"
                         ;;
                 *)
+                        echo -e "\n\n"
                         echo "Fatal error: UNKNOW OPERATION"
                         echo "Try 'myxtrabackupex -h' for more information."
                         exit 99
+                        echo -e "\n\n"
                         ;;
         esac
     fi
@@ -348,21 +401,18 @@ func_check_file f $CONF_FILE && source $CONF_FILE
 #/*
 # * check system cmd
 # */
-CP=$(which cp)
-MV=$(which mv)
-RM=$(which rm)
-MKDIR=$(which mkdir)
-DATE=$(which date)
-CHOWN=$(which chown)
-SLEEP=$(which sleep)
-FIND=$(which find)
-RSYNC=$(which rsync)
-func_check_file f $CP
-func_check_file f $MV
-func_check_file f $DATE
-func_check_file f $CHOWN
-func_check_file f $SLEEP
-func_check_file f $FIND
+CP=$(which cp) && func_check_file f $CP
+MV=$(which mv) && func_check_file f $MV
+RM=$(which rm) && func_check_file f $RM
+MKDIR=$(which mkdir) && func_check_file f $MKDIR
+DATE=$(which date) && func_check_file f $DATE
+CHOWN=$(which chown) && func_check_file f $CHOWN
+SLEEP=$(which sleep) && func_check_file f $SLEEP
+FIND=$(which find)  && func_check_file f $FIND
+TOUCH=$(which touch) &&  func_check_file f $TOUCH
+TAR=$(which tar) && func_check_file f $TAR
+GZIP=$(which gzip) && func_check_file f $GZIP
+RSYNC=$(which rsync)&& func_check_file f $RSYNC
 
 #/*
 # * check work dir
@@ -377,8 +427,15 @@ func_check_file f $XTRABAK_DIR/$QPRESS
 func_check_file f $XTRABAK_DIR/$INNOBACKUPEX
 export PATH=$PATH:$XTRABAK_DIR:$MySQL_CMD_DIR
 
+
 #/*
 # * main function
+# * Usage: myxtrabackupex [OPTIONS]
+# *        myxtrbackupex.sh -c cfg_file -o backup -t full
+# *   -c : configure file
+# *   -o : operation [ backup | recover ]
+# *   -t : type [ full | incre ], default is full.
+# *   -h : help
 # */
 
 main
