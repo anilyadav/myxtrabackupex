@@ -53,11 +53,7 @@ function func_check_backup_args()
         for dbname in $DATABASES; do db_list=$db_list"$dbname "; done
         IFS=$OLD_IFS
         db_list=$(echo $db_list)
-        OPTIONS=$OPTIONS" --databases='$db_list'"
-    fi
-    if [ -n "$STREAM" ]; then
-        [ $STREAM = "xbstream" ] && OPTIONS=$OPTIONS" --stream=xbstream" || \
-           { [ $STREAM = "tar" ] && OPTIONS=$OPTIONS" --stream=tar" ; }
+#        OPTIONS=$OPTIONS" --databases='$db_list'"
     fi
     if [[ "$COMPRESS" =~ ^[1-9][0-9]*$ ]]; then
         if [ $COMPRESS -eq 1 ]; then
@@ -69,7 +65,7 @@ function func_check_backup_args()
     [[ "$THROTTLE" =~ ^[1-9][0-9]*$ ]] && [ $THROTTLE -ge 1 ] && OPTIONS=$OPTIONS" --throttle=$THROTTLE"
     [[ "$USE_MEMORY" =~ ^[1-9][0-9kKmMgG]*$ ]] && OPTIONS=$OPTIONS" --use-memory=$USE_MEMORY"
 
-    OPTIONS=$OPTIONS" --no-timestamp --no-lock --slave-info --safe-slave-backup --extra-lsndir=$TEMP_DIR --tmpdir=$TEMP_DIR --defaults-file=$MySQL_CNF"
+    OPTIONS=" --defaults-file=$MySQL_CNF --no-timestamp --no-lock --slave-info --safe-slave-backup --extra-lsndir=$TEMP_DIR --tmpdir=$TEMP_DIR "$OPTIONS
 
     [ "incre" = "$BACKUP_TYPE" ] && INCRE_OPTIONS=" --incremental-basedir=$TEMP_DIR --incremental"
 }
@@ -86,34 +82,35 @@ function func_backup()
     DATE_TIME=$(date "+%Y%m%d_%H%M%S")
     BACKUP_FILE_DIR=$BACKUP_DIR/${BACKUP_FILE_PREFIX}${DATE_TIME}${BACKUP_FILE_SUFFIX}
     if [ "incre" = "$BACKUP_TYPE" ]; then
-                func_check_file f $TEMP_DIR/xtrabackup_checkpoints
-                BACKUP_FILE_DIR=${BACKUP_FILE_DIR}_incre
-    fi
-
-    if [ -n "$STREAM" ]; then
-            backup_file=${BACKUP_FILE_DIR}.${STREAM}
-            if [ "$GZIP_OPTS" = "1" ]; then
-                 BACKUP_TARGET=$BACKUP_DIR" | $GZIP - >"
-                 backup_file=${backup_file}.gz
-            else
-                 BACKUP_TARGET=$BACKUP_DIR" >"
-            fi
-    else
-            backup_file=$BACKUP_FILE_DIR
+        func_check_file f $TEMP_DIR/xtrabackup_checkpoints
+        BACKUP_FILE_DIR=${BACKUP_FILE_DIR}_incre
     fi
 
     DATE_START=$($DATE "+%s")
-    echo "$INNOBACKUPEX $OPTIONS $INCRE_OPTIONS $BACKUP_TARGET $backup_file"
-    $INNOBACKUPEX $OPTIONS $INCRE_OPTIONS $BACKUP_TARGET $backup_file >> ${backup_file}.log 2>&1
+    if [ -z "$STREAM" ]; then
+        echo "$INNOBACKUPEX --databases="$db_list" $OPTIONS $INCRE_OPTIONS $BACKUP_FILE_DIR"
+        $INNOBACKUPEX --databases="$db_list" $OPTIONS $INCRE_OPTIONS $BACKUP_FILE_DIR >> ${BACKUP_FILE_DIR}.log 2>&1;
+    else
+        BACKUP_FILE_NAME=${BACKUP_FILE_DIR}.${STREAM}
+        if [ "$GZIP_OPTS" = "1" ]; then
+            echo "$INNOBACKUPEX --databases="$db_list" --stream=$STREAM $OPTIONS $INCRE_OPTIONS ${BACKUP_DIR} | $GZIP - > ${BACKUP_FILE_NAME}.gz"
+            ( $INNOBACKUPEX --databases="$db_list" --stream=$STREAM $OPTIONS $INCRE_OPTIONS ${BACKUP_DIR} | $GZIP - > ${BACKUP_FILE_NAME}.gz; ) \
+                >> ${BACKUP_FILE_NAME}.log 2>&1;
+        else
+            echo "$INNOBACKUPEX --databases="$db_list" --stream=$STREAM $OPTIONS $INCRE_OPTIONS ${BACKUP_DIR} > ${BACKUP_FILE_NAME}"
+            ( $INNOBACKUPEX --databases="$db_list" --stream=$STREAM $OPTIONS $INCRE_OPTIONS ${BACKUP_DIR} > ${BACKUP_FILE_NAME}; ) \
+                >> ${BACKUP_FILE_NAME}.log 2>&1;
+        fi
+    fi
     RETVAL=$?
     DATE_END=$($DATE "+%s")
 
     if [ $RETVAL = 0 ]; then
-                echo "1.$($DATE "+%F_%T"): innobackupex completed OK! Spend time $((DATE_END-DATE_START)) Sec."
-                echo ""
+        echo "1.$($DATE "+%F_%T"): innobackupex completed OK! Spend time $((DATE_END-DATE_START)) Sec."
+        echo ""
     else
-                echo "1.$($DATE "+%F_%T"): innobackupex operation failed! Spend time $((DATE_END-DATE_START)) Sec."
-                exit 1
+        echo "1.$($DATE "+%F_%T"): innobackupex operation failed! Spend time $((DATE_END-DATE_START)) Sec."
+        exit 1
     fi
     echo ""
     #------------ simple separator line ------------
