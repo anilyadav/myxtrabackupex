@@ -1,0 +1,87 @@
+#!/bin/sh
+
+mysql_username="root"
+mysql_password=""
+
+mysql_port=$2
+mysql_base="/data1/webserver/percona5528"
+mysql_root="/data1/webserver/percona5528_${mysql_port}"
+mysql_datadir=${mysql_root}/data
+mysql_conf=${mysql_root}/my_${mysql_port}.cnf
+mysql_sock=/tmp/my_${mysql_port}.sock
+
+cd $mysql_base;
+
+function_check_ip()
+{
+        ipaddr=$(/sbin/ifconfig -a | /bin/awk '/inet / && /10\.|172\.|192\./ {printf ("%s;",$2)} END {print}'| /usr/bin/tr -d "addr:" | /bin/awk -F \; '{print $1}')
+}
+
+
+function_check_mysql()
+{
+        if [ ! -d $mysql_root ]
+        then
+                echo -e "Error: \t Please check MySQL install"
+                exit 1
+        fi
+
+        if [ ! -d $mysql_data ]
+        then
+                echo "Error: \tPlease check MySQL data path"
+                exit 1
+        fi
+}
+
+function_start_mysql()
+{
+        printf "Starting MySQL...\n"
+        ulimit -SHn 40960
+        TCMalloc="/usr/local/lib/libtcmalloc.so"
+        [ -f "$TCMalloc" ] && LD_PRELOAD=$TCMalloc;
+
+        function_check_ip
+        ${mysql_base}/bin/mysqld_safe --defaults-file=$mysql_conf --basedir=${mysql_base} --datadir=${mysql_datadir} --bind-address=$ipaddr --skip-name-resolve -u mysql 2>&1 > /dev/null &
+}
+
+function_stop_mysql()
+{
+        printf "Stoping MySQL...\n"
+        ${mysql_base}/bin/mysqladmin -u${mysql_username} -p${mysql_password} -S $mysql_sock shutdown
+}
+
+function_restart_mysql()
+{
+        printf "Restarting MySQL...\n"
+        function_stop_mysql
+        function_start_mysql
+}
+
+function_kill_mysql()
+{
+        pid1=$(ps -ef | grep 'bin/mysqld_safe' | grep ${mysql_port} | awk '{printf $2}')
+        [ -n "$pid1" ] && kill -9 $pid1 || echo "No mysqld_safe process be killed"
+        pid2=$(ps -ef | grep 'libexec/mysqld' | grep ${mysql_port} | awk '{printf $2}')
+        [ -n "$pid2" ] && kill -9 $pid2 || echo "No mysqld process be killed"
+}
+
+case $1 in
+        "start")
+                function_check_mysql
+                function_start_mysql
+                ;;
+        "stop")
+                function_check_mysql
+                function_stop_mysql
+                ;;
+        "restart")
+                function_check_mysql
+                function_restart_mysql
+                ;;
+        "kill")
+                function_kill_mysql
+                ;;
+        *)
+                echo -e "Usage: \n\tmysqlctl {start|stop|restart|kill}\n"
+                ;;
+esac
