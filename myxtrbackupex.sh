@@ -40,7 +40,7 @@ function func_check_file()
 # */
 function func_check_backup_args()
 {
-    func_check_file d $MySQL_BASE
+    func_check_file d $MySQL_DATA_DIR
     func_check_file f $MySQL_CNF
     #[ -n "$RETAIN_DAYS" ] && RETAIN_DAYS
 
@@ -171,8 +171,7 @@ function func_backup()
 # */
 function func_check_recover_args()
 {
-    func_check_file d $RECOVER_MySQL_BASE
-    func_check_file d $RECOVER_MySQL_BASE/data
+    func_check_file d $RECOVER_DATA_DIR
     func_check_file d $TEMP_DIR
     func_check_file d $RECOVER_DIR
     func_check_file f $RECOVER_MySQL_CNF
@@ -300,7 +299,7 @@ function func_recover()
 
     DATE_END=$($DATE "+%s")
     if [ $RETVAL -eq 0 ]; then
-        [ -n "$MySQL_USER" -a -n "$MySQL_GROUP" ] && $CHOWN -R ${MySQL_USER}:${MySQL_GROUP} $RECOVER_MySQL_BASE
+        [ -n "$MySQL_USER" -a -n "$MySQL_GROUP" ] && $CHOWN -R ${MySQL_USER}:${MySQL_GROUP} $RECOVER_DATA_DIR
         echo -e "\t4.$($DATE "+%F %T") innobackupex move-back success! Spend time ($((DATE_END-DATE_START)) Sec)"
     else
         echo -e "\t4.$($DATE "+%F %T") innobackupex move-back failed! Spend time ($((DATE_END-DATE_START)) Sec)"
