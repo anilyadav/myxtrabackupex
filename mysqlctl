@@ -1,87 +1,102 @@
 #!/bin/sh
 
+
+[ $# -ne 2 ] && { echo -e "Usage: \n\t$0 {start|stop|restart|kill} port\n"; exit 1; }
+
+OPTS=$1
+MYSQL_PORT=$2
+MYSQL_BASE="/data1/mysql5610"
+MYSQLD_SAFE=${MYSQL_BASE}/bin/mysqld_safe
+MYSQLADMIN=${MYSQL_BASE}/bin/mysqladmin
+
+MYSQL_DATA_DIR=/data1/mysql5610_${MYSQL_PORT}/data
+MYSQL_CONF=/data1/mysql5610_${MYSQL_PORT}/my_${MYSQL_PORT}.cnf
+MYSQL_SOCK=/tmp/mysql_${MYSQL_PORT}.sock
 mysql_username="root"
 mysql_password=""
 
-mysql_port=$2
-mysql_base="/data1/webserver/percona5528"
-mysql_root="/data1/webserver/percona5528_${mysql_port}"
-mysql_datadir=${mysql_root}/data
-mysql_conf=${mysql_root}/my_${mysql_port}.cnf
-mysql_sock=/tmp/my_${mysql_port}.sock
 
-cd $mysql_base;
-
-function_check_ip()
+#/*
+# * test args
+# */
+function func_check_file()
 {
-        ipaddr=$(/sbin/ifconfig -a | /bin/awk '/inet / && /10\.|172\.|192\./ {printf ("%s;",$2)} END {print}'| /usr/bin/tr -d "addr:" | /bin/awk -F \; '{print $1}')
+    type=$1
+    filepath=$2
+    if [ ! -$type "$filepath" ]; then
+        echo -e "\tError: $filepath dont existed; Please check this file path."
+        exit 2
+    fi
+}
+
+#/*
+# *  get local ip for bind listening address
+# */
+function_get_ip()
+{
+    IPADDR=$(/sbin/ifconfig -a | /bin/awk '/inet / && /10\.|172\.|192\./ {printf ("%s;",$2)} END {print}'| /usr/bin/tr -d "addr:" | /bin/awk -F \; '{print $1}')
 }
 
 
 function_check_mysql()
 {
-        if [ ! -d $mysql_root ]
-        then
-                echo -e "Error: \t Please check MySQL install"
-                exit 1
-        fi
-
-        if [ ! -d $mysql_data ]
-        then
-                echo "Error: \tPlease check MySQL data path"
-                exit 1
-        fi
+    [ ! -d $MYSQL_BASE ] && { echo -e "Error: \t Please check MySQL install"; exit 1; }
+    [ ! -d $MYSQL_DATA_DIR ] && { echo -e "Error: \tPlease check MySQL datadir path"; exit 1; }
 }
 
 function_start_mysql()
 {
-        printf "Starting MySQL...\n"
-        ulimit -SHn 40960
-        TCMalloc="/usr/local/lib/libtcmalloc.so"
-        [ -f "$TCMalloc" ] && LD_PRELOAD=$TCMalloc;
+    printf "Starting MySQL...\n"
+    [ "root" = $(id -u -n) ] && ulimit -SHn 40960
+    TCMalloc="/usr/local/lib/libtcmalloc.so" && [ -f "$TCMalloc" ] && LD_PRELOAD=$TCMalloc;
 
-        function_check_ip
-        ${mysql_base}/bin/mysqld_safe --defaults-file=$mysql_conf --basedir=${mysql_base} --datadir=${mysql_datadir} --bind-address=$ipaddr --skip-name-resolve -u mysql 2>&1 > /dev/null &
+    cd $MYSQL_BASE;
+    func_check_file f $MYSQLD_SAFE
+    function_get_ip
+    $MYSQLD_SAFE --defaults-file=$MYSQL_CONF --basedir=${MYSQL_BASE} --datadir=${MYSQL_DATA_DIR} --bind-address=$IPADDR --skip-name-resolve -u mysql 2>&1 > /dev/null &
 }
 
 function_stop_mysql()
 {
-        printf "Stoping MySQL...\n"
-        ${mysql_base}/bin/mysqladmin -u${mysql_username} -p${mysql_password} -S $mysql_sock shutdown
+    printf "Stoping MySQL...\n"
+    func_check_file f $MYSQLADMIN
+    $MYSQLADMIN -u${mysql_username} -p${mysql_password} -S $MYSQL_SOCK shutdown
 }
 
 function_restart_mysql()
 {
-        printf "Restarting MySQL...\n"
-        function_stop_mysql
-        function_start_mysql
+    printf "Restarting MySQL...\n"
+    function_stop_mysql
+    function_start_mysql
 }
 
 function_kill_mysql()
 {
-        pid1=$(ps -ef | grep 'bin/mysqld_safe' | grep ${mysql_port} | awk '{printf $2}')
-        [ -n "$pid1" ] && kill -9 $pid1 || echo "No mysqld_safe process be killed"
-        pid2=$(ps -ef | grep 'libexec/mysqld' | grep ${mysql_port} | awk '{printf $2}')
-        [ -n "$pid2" ] && kill -9 $pid2 || echo "No mysqld process be killed"
+    pid1=$(ps -ef | grep 'bin/mysqld_safe' | grep ${MYSQL_PORT} | awk '{printf $2}')
+    [ -n "$pid1" ] && kill -9 $pid1 || echo "No mysqld_safe process be killed"
+    pid2=$(ps -ef | grep 'bin/mysqld' | grep ${MYSQL_PORT} | awk '{printf $2}')
+    [ -n "$pid2" ] && kill $pid2 || echo "No mysqld process be killed"
 }
 
-case $1 in
-        "start")
-                function_check_mysql
-                function_start_mysql
-                ;;
-        "stop")
-                function_check_mysql
-                function_stop_mysql
-                ;;
-        "restart")
-                function_check_mysql
-                function_restart_mysql
-                ;;
-        "kill")
-                function_kill_mysql
-                ;;
-        *)
-                echo -e "Usage: \n\tmysqlctl {start|stop|restart|kill}\n"
-                ;;
+case $OPTS in
+    "start")
+        function_check_mysql
+        function_start_mysql
+    ;;
+    "stop")
+        function_check_mysql
+        function_stop_mysql
+    ;;
+    "restart")
+        function_check_mysql
+        function_restart_mysql
+    ;;
+    "kill")
+        function_kill_mysql
+    ;;
+    *)
+       echo -e "Usage: \n\t$0 {start|stop|restart|kill} port\n"
+    ;;
 esac
+
+exit 0
